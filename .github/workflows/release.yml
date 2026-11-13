@@ -42,7 +42,7 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fakeroot rpm
+          sudo apt-get install -y --no-install-recommends fakeroot rpm imagemagick desktop-file-utils
 
       - name: Test
         run: ./gradlew :desktop:test
@@ -51,6 +51,14 @@ jobs:
       # a bare "External tool execution failed".
       - name: Package
         run: ./gradlew :desktop:packageDeb :desktop:packageRpm
+
+      # jpackage ships an invalid .desktop (Categories=Unknown) and registers the
+      # menu entry only via postinst, which fails on minimal systems (dpkg
+      # configure error, no launcher). Fix it in place; see docs/DESKTOP-PACKAGING.md.
+      - name: Fix the .deb desktop integration
+        run: |
+          DEB=$(ls desktop/build/compose/binaries/main/deb/*.deb)
+          packaging/fix-release-deb.sh "$DEB"
 
       # Portable build: the jpackage app image as a tarball. Works on any glibc
       # distribution regardless of package manager, and needs no install step.
@@ -71,6 +79,7 @@ jobs:
           # startup with NoClassDefFoundError: java/sql/DriverManager. This check
           # exists because that exact regression shipped once already.
           dpkg-deb -x "$DEB" /tmp/debcheck
+          desktop-file-validate /tmp/debcheck/usr/share/applications/t-bone-desktop.desktop
           if ! grep -rq "java.sql" /tmp/debcheck/opt/t-bone-desktop/lib/runtime/release; then
             echo "::error::runtime image is missing java.sql — the packaged app will not start"
             exit 1
@@ -104,7 +113,7 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fakeroot
+          sudo apt-get install -y --no-install-recommends fakeroot imagemagick desktop-file-utils
 
       - name: Test
         run: ./gradlew :desktop:test
@@ -112,12 +121,19 @@ jobs:
       - name: Package
         run: ./gradlew :desktop:packageDeb
 
+      - name: Fix the .deb desktop integration
+        run: |
+          DEB=$(ls desktop/build/compose/binaries/main/deb/*.deb)
+          packaging/fix-release-deb.sh "$DEB"
+
       - name: Verify architecture
         run: |
           DEB=$(ls desktop/build/compose/binaries/main/deb/*.deb)
           dpkg-deb -I "$DEB" | grep -q "Architecture: arm64" || {
             echo "::error::expected an arm64 package"; dpkg-deb -I "$DEB"; exit 1; }
           dpkg-deb -x "$DEB" /tmp/debcheck
+          desktop-file-validate /tmp/debcheck/usr/share/applications/t-bone-desktop.desktop || {
+            echo "::error::desktop entry is invalid"; exit 1; }
           grep -rq "java.sql" /tmp/debcheck/opt/t-bone-desktop/lib/runtime/release || {
             echo "::error::runtime image is missing java.sql"; exit 1; }
 
@@ -201,6 +217,11 @@ jobs:
 
             **Verified in CI on this tag:** Linux x86_64 `.deb`, Linux ARM64 `.deb`,
             `.rpm`, and a portable `.tar.gz`.
+
+            This tag fixes the desktop-integration defect in the `.deb` packages
+            (menu entry failed to register / package could not finish postinst).
+            The packages now ship a valid `/usr/share/applications` entry and
+            hicolor icon directly — see `docs/DESKTOP-PACKAGING.md`.
 
             | Asset | Install |
             |---|---|
