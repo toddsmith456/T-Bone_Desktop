@@ -1,0 +1,217 @@
+name: Release
+
+# Triggered by pushing a version tag, e.g.:
+#   git tag v0.3.36-desktop.1 && git push origin v0.3.36-desktop.1
+#
+# Everything here runs on GitHub's own runners because `jpackage` cannot
+# cross-compile: a Linux host produces .deb/.rpm, a Windows host .msi, a macOS
+# host .dmg. The ARM64 .deb needs an arm64 host, which is why it runs in its own
+# job rather than on the x64 runner with a cross-compile flag that does not exist.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      upload_assets:
+        description: 'Upload built artifacts as release assets'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # required to create the release and upload assets
+
+jobs:
+  # ── Linux x86_64: .deb, .rpm and the portable tarball ────────────────────
+  linux-x64:
+    name: Linux x86_64 (.deb, .rpm, .tar.gz)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fakeroot rpm
+
+      - name: Test
+        run: ./gradlew :desktop:test
+
+      # packageRpm needs the `rpm` package above; without it the task fails with
+      # a bare "External tool execution failed".
+      - name: Package
+        run: ./gradlew :desktop:packageDeb :desktop:packageRpm
+
+      # Portable build: the jpackage app image as a tarball. Works on any glibc
+      # distribution regardless of package manager, and needs no install step.
+      - name: Build portable tarball
+        run: |
+          ./gradlew :desktop:createDistributable
+          APP_DIR="desktop/build/compose/binaries/main/app/t-bone-desktop"
+          test -d "$APP_DIR" || { echo "app image not found at $APP_DIR"; ls desktop/build/compose/binaries/main; exit 1; }
+          tar -C "$(dirname "$APP_DIR")" -czf "t-bone-desktop_0.3.36-linux-x86_64.tar.gz" \
+              "$(basename "$APP_DIR")"
+          sha256sum "t-bone-desktop_0.3.36-linux-x86_64.tar.gz" > "t-bone-desktop-linux-x86_64.tar.gz.sha256"
+
+      - name: Verify the .deb is well formed
+        run: |
+          DEB=$(ls desktop/build/compose/binaries/main/deb/*.deb)
+          dpkg-deb -I "$DEB"
+          # The runtime image must contain java.sql, or the installed app dies at
+          # startup with NoClassDefFoundError: java/sql/DriverManager. This check
+          # exists because that exact regression shipped once already.
+          dpkg-deb -x "$DEB" /tmp/debcheck
+          if ! grep -rq "java.sql" /tmp/debcheck/opt/t-bone-desktop/lib/runtime/release; then
+            echo "::error::runtime image is missing java.sql — the packaged app will not start"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: |
+            desktop/build/compose/binaries/main/deb/*.deb
+            desktop/build/compose/binaries/main/rpm/*.rpm
+            t-bone-desktop_0.3.36-linux-x86_64.tar.gz
+            t-bone-desktop-linux-x86_64.tar.gz.sha256
+
+  # ── Linux ARM64: .deb ────────────────────────────────────────────────────
+  linux-arm64:
+    name: Linux ARM64 (.deb)
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fakeroot
+
+      - name: Test
+        run: ./gradlew :desktop:test
+
+      - name: Package
+        run: ./gradlew :desktop:packageDeb
+
+      - name: Verify architecture
+        run: |
+          DEB=$(ls desktop/build/compose/binaries/main/deb/*.deb)
+          dpkg-deb -I "$DEB" | grep -q "Architecture: arm64" || {
+            echo "::error::expected an arm64 package"; dpkg-deb -I "$DEB"; exit 1; }
+          dpkg-deb -x "$DEB" /tmp/debcheck
+          grep -rq "java.sql" /tmp/debcheck/opt/t-bone-desktop/lib/runtime/release || {
+            echo "::error::runtime image is missing java.sql"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: desktop/build/compose/binaries/main/deb/*.deb
+
+  # ── Windows and macOS: written, but NOT verified ─────────────────────────
+  # These targets have never been built for this project. They are included
+  # with continue-on-error so a failure here does not block the Linux release,
+  # and they are labelled in the release notes as untested. Promoting them to
+  # hard requirements requires someone to actually run them on real hardware or
+  # a Windows/macOS runner and fix what breaks (icons, code signing, DMG layout).
+  windows-msi:
+    name: Windows MSI (untested)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v3
+      - name: Package MSI
+        run: ./gradlew :desktop:packageMsi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi
+          path: desktop/build/compose/binaries/main/msi/*.msi
+          if-no-files-found: warn
+
+  macos-dmg:
+    name: macOS DMG (untested)
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v3
+      - name: Package DMG
+        run: ./gradlew :desktop:packageDmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: desktop/build/compose/binaries/main/dmg/*.dmg
+          if-no-files-found: warn
+
+  # ── Publish ──────────────────────────────────────────────────────────────
+  release:
+    name: Create release
+    needs: [linux-x64, linux-arm64]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect assets
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' -o -name '*.sha256' \
+            -o -name '*.msi' -o -name '*.dmg' \) -exec cp {} dist/ \;
+          ls -lh dist/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: false
+          body: |
+            T-Bone Desktop — desktop port of T-Bone v0.3.36 (upstream `9c350e3c`).
+
+            **Verified in CI on this tag:** Linux x86_64 `.deb`, Linux ARM64 `.deb`,
+            `.rpm`, and a portable `.tar.gz`.
+
+            | Asset | Install |
+            |---|---|
+            | `*_amd64.deb` | `sudo dpkg -i <file>` |
+            | `*_arm64.deb` | `sudo dpkg -i <file>` |
+            | `*.x86_64.rpm` | `sudo rpm -ivh <file>` |
+            | `*linux-x86_64.tar.gz` | extract and run `t-bone-desktop/bin/t-bone-desktop` |
+
+            Windows `.msi` and macOS `.dmg` are **not** built here: `jpackage`
+            cannot cross-compile, and neither target has been verified for this
+            project. Treat them as absent rather than unsupported.
+
+            Known limitations — read `docs/PARITY.md` in the repository before
+            relying on this for anything sensitive. Key storage is a `0600`
+            AES-GCM file, not a hardware keystore. No bundled Tor. NIP-46 is
+            untested against a live bunker.
+
+            Upstream: T-Bone, MIT, Copyright (c) 2026 daomah.
