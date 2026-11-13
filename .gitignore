@@ -1,0 +1,29 @@
+# Gradle / Kotlin
+.gradle/
+.kotlin/
+build/
+*/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+
+# App data / secrets — never commit these
+t-bone-data/
+*.key
+storage.key
+tbone.db
+tbone.db-*
+logs/
+
+# Packaged output
+desktop/build/compose/binaries/
+*.deb
+*.rpm
+*.AppImage
+*.msi
