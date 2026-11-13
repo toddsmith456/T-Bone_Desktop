@@ -45,7 +45,12 @@ compose.desktop {
         mainClass = "social.tbone.desktop.MainKt"
         jvmArgs += listOf("-Dapple.awt.application.appearance=system", "-Xmx1g")
         nativeDistributions {
-            targetFormats(TargetFormat.Deb)
+            // Deb is the primary target. Rpm is listed so the packageRpm task
+            // exists; it is built and published by the release workflow. Windows
+            // (.msi) and macOS (.dmg) are deliberately absent: jpackage can only
+            // build for the host OS, so listing them here would create tasks that
+            // can never succeed on a Linux machine.
+            targetFormats(TargetFormat.Deb, TargetFormat.Rpm)
 
             // JDK modules the app actually touches. Without this, jpackage infers a
             // module set from static analysis and omits java.sql, so the packaged app
