@@ -94,6 +94,23 @@ this build was finally verified against after installing `menu` +
 `/usr/share/applications/` and `/opt/t-bone-desktop/bin/t-bone-desktop` regardless, so
 the app is usable even on a headless host that trips this check.
 
+## Prebuilt packages
+
+Tagging `v*` runs `.github/workflows/release.yml`, which builds and publishes:
+
+| Asset | Architecture |
+|---|---|
+| `t-bone-desktop_<ver>-1_amd64.deb` | x86_64 Linux |
+| `t-bone-desktop_<ver>-1_arm64.deb` | ARM64 Linux |
+| `t-bone-desktop-<ver>-1.x86_64.rpm` | x86_64 Linux |
+| `t-bone-desktop_<ver>-linux-x86_64.tar.gz` | x86_64, no install needed |
+
+ARM64 has to be built on an arm64 runner — `jpackage` cannot cross-compile, so
+there is no flag that produces an arm64 package from an x86_64 host.
+
+Windows and macOS are **not** built. `jpackage` can only target its own OS, and
+neither has been verified for this project.
+
 ## Packaging notes that cost real time (kept so they are not rediscovered)
 
 - **`modules(...)` must be pinned.** `jpackage` inferred a runtime image containing
